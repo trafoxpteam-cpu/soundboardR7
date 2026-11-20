@@ -13,6 +13,16 @@ Eine deutschsprachige Soundboard-Web-App zum Entdecken, Hochladen, Anhören, Fav
 
 Ohne Supabase-Zugangsdaten zeigt die App einen Einrichtungsmodus. Anmeldung, Uploads, Favoriten und die Community-Bibliothek werden nicht lokal vorgetäuscht.
 
+Wenn die Website `permission denied for table sounds` anzeigt, müssen zusätzlich die Tabellenrechte im Supabase **SQL Editor** gesetzt werden:
+
+```sql
+grant select on table public.sounds to anon, authenticated;
+grant insert, update, delete on table public.sounds to authenticated;
+grant select, insert, delete on table public.favorites to authenticated;
+```
+
+Diese Rechte umgehen RLS nicht; die oben definierten Policies beschränken weiterhin, welche Zeilen Nutzer ändern oder sehen dürfen.
+
 ## Auf GitHub Pages veröffentlichen
 
 Der Workflow unter [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) baut und veröffentlicht die App automatisch bei jedem Push auf `main`.

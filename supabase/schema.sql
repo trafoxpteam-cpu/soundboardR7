@@ -18,6 +18,10 @@ create table if not exists public.favorites (
 create index if not exists sounds_created_at_idx on public.sounds (created_at desc);
 create index if not exists favorites_sound_id_idx on public.favorites (sound_id);
 
+grant select on table public.sounds to anon, authenticated;
+grant insert, update, delete on table public.sounds to authenticated;
+grant select, insert, delete on table public.favorites to authenticated;
+
 alter table public.sounds enable row level security;
 alter table public.favorites enable row level security;
 
