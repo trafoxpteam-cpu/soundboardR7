@@ -21,6 +21,7 @@ jobs:
     env:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+      VITE_AUTH_REDIRECT_URL: https://trafoxpteam-cpu.github.io/soundboardR7/
     steps:
       - name: Check out source
         uses: actions/checkout@v4

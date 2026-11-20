@@ -6,4 +6,5 @@ export type Sound = {
   file_path: string;
   mime_type: string;
   created_at: string;
+  is_published: boolean;
 };

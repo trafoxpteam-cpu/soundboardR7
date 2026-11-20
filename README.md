@@ -31,8 +31,10 @@ Der Workflow unter [`.github/workflows/deploy.yml`](./.github/workflows/deploy.y
    - `VITE_SUPABASE_URL`: die Project URL aus Supabase
    - `VITE_SUPABASE_PUBLISHABLE_KEY`: der Publishable-/anon-Key aus Supabase
 2. Unter **Settings → Pages** als Build and deployment source **GitHub Actions** auswählen.
-3. In Supabase unter **Authentication → URL Configuration** diese Redirect URL erlauben: `https://trafoxpteam-cpu.github.io/soundboardR7/`
+3. In Supabase unter **Authentication → URL Configuration** die Site URL auf `https://trafoxpteam-cpu.github.io/soundboardR7/` setzen und diese Adresse als Redirect URL erlauben.
 4. Den Workflow **Deploy to GitHub Pages** ausführen oder auf einen Push nach `main` warten.
+
+Der Deploy-Build verwendet diese Adresse als `VITE_AUTH_REDIRECT_URL`, damit Bestätigungslinks unabhängig davon, wo die Registrierung gestartet wurde, zur veröffentlichten Website zurückkehren. Lokal kannst du `VITE_AUTH_REDIRECT_URL` auf `http://localhost:5173/` setzen oder die Variable weglassen; dann wird die aktuelle lokale Adresse verwendet.
 
 Die Website ist dann unter <https://trafoxpteam-cpu.github.io/soundboardR7/> erreichbar. Nach Änderungen kann es einige Minuten dauern, bis GitHub Pages die neue Version ausliefert.
 
@@ -41,8 +43,11 @@ Die Website ist dann unter <https://trafoxpteam-cpu.github.io/soundboardR7/> err
 - Registrierung und Anmeldung per E-Mail und Passwort
 - Öffentliche Sound-Bibliothek mit Suche und Audio-Player
 - Upload von MP3-, WAV- und OGG-Dateien (bis 20 MB)
+- Eigene Uploads verwalten, veröffentlichen, verbergen oder löschen
 - Favoriten pro Benutzerkonto
 - Sound-Dateien herunterladen
 - Row Level Security für Sound-Metadaten, Favoriten und Storage-Dateien
 
 Uploader müssen bestätigen, die nötigen Rechte am Sound zu besitzen und ihn anderen zum Anhören und Herunterladen bereitzustellen. Vor einem öffentlichen Launch sollte zusätzlich ein Melde- und Moderationsprozess für rechtswidrige oder unerwünschte Inhalte eingerichtet werden.
+
+Für Änderungen am Supabase-Schema das aktualisierte `supabase/schema.sql` erneut im SQL Editor ausführen. Unveröffentlichte Sounds sind nur für ihren Uploader zugänglich; Audio-Dateien werden über zeitlich begrenzte Links abgespielt.

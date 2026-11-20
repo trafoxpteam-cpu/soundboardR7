@@ -11,6 +11,9 @@ import {
   LogOut,
   Search,
   Sparkles,
+  Eye,
+  EyeOff,
+  Trash2,
   X,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
@@ -27,7 +30,7 @@ const CANONICAL_AUDIO_TYPES: Record<string, string> = {
 };
 
 type AuthMode = "login" | "signup";
-type LibraryMode = "all" | "favorites";
+type LibraryMode = "all" | "favorites" | "mine";
 
 function getFileExtension(fileName: string) {
   return fileName.split(".").pop()?.toLowerCase() ?? "";
@@ -37,9 +40,23 @@ function formatDate(date: string) {
   return new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(date));
 }
 
+function getAudioUrls(
+  sounds: Sound[],
+  signedFiles: { path: string | null; signedUrl: string | null }[] | null,
+) {
+  const soundIdsByPath = new Map(sounds.map((sound) => [sound.file_path, sound.id]));
+  const urls: Record<string, string> = {};
+  for (const file of signedFiles ?? []) {
+    const soundId = file.path ? soundIdsByPath.get(file.path) : undefined;
+    if (soundId && file.signedUrl) urls[soundId] = file.signedUrl;
+  }
+  return urls;
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [sounds, setSounds] = useState<Sound[]>([]);
+  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [libraryMode, setLibraryMode] = useState<LibraryMode>("all");
@@ -51,6 +68,7 @@ function App() {
   const [selectedFileName, setSelectedFileName] = useState("");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [busySoundIds, setBusySoundIds] = useState<Set<string>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const openAuth = (mode: AuthMode = "login") => {
@@ -89,7 +107,7 @@ function App() {
       setErrorMessage("");
       const { data: soundData, error: soundError } = await client
         .from("sounds")
-        .select("id,user_id,title,description,file_path,mime_type,created_at")
+        .select("id,user_id,title,description,file_path,mime_type,created_at,is_published")
         .order("created_at", { ascending: false });
 
       if (soundError) {
@@ -99,6 +117,20 @@ function App() {
         }
         return;
       }
+
+      const { data: signedFiles, error: signedFilesError } = soundData.length
+        ? await client.storage
+            .from("sounds")
+            .createSignedUrls(soundData.map((sound) => sound.file_path), 3600)
+        : { data: [], error: null };
+      if (signedFilesError) {
+        if (active) {
+          setErrorMessage(`Audiodateien konnten nicht geladen werden: ${signedFilesError.message}`);
+          setIsLoading(false);
+        }
+        return;
+      }
+      const failedAudio = signedFiles?.find((file) => file.error || !file.signedUrl);
 
       let favoriteIds: string[] = [];
       if (currentUser) {
@@ -118,7 +150,11 @@ function App() {
 
       if (active) {
         setSounds(soundData);
+        setAudioUrls(getAudioUrls(soundData, signedFiles));
         setFavorites(new Set(favoriteIds));
+        if (failedAudio) {
+          setErrorMessage(`Mindestens eine Audiodatei konnte nicht zum Abspielen vorbereitet werden: ${failedAudio.error ?? "Kein Wiedergabelink erhalten."}`);
+        }
         setIsLoading(false);
       }
     };
@@ -139,6 +175,7 @@ function App() {
     const { data: authListener } = client.auth.onAuthStateChange((_event, session) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
+      if (!currentUser) setLibraryMode("all");
       window.setTimeout(() => {
         if (active) void loadLibrary(currentUser);
       }, 0);
@@ -164,13 +201,18 @@ function App() {
   const visibleSounds = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("de");
     return sounds.filter((sound) => {
-      const matchesMode = libraryMode === "all" || favorites.has(sound.id);
+      const matchesMode =
+        libraryMode === "all"
+          ? sound.is_published
+          : libraryMode === "favorites"
+            ? sound.is_published && favorites.has(sound.id)
+            : sound.user_id === user?.id;
       const matchesQuery =
         !normalizedQuery ||
         `${sound.title} ${sound.description}`.toLocaleLowerCase("de").includes(normalizedQuery);
       return matchesMode && matchesQuery;
     });
-  }, [favorites, libraryMode, query, sounds]);
+  }, [favorites, libraryMode, query, sounds, user]);
 
   const runAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -189,7 +231,9 @@ function App() {
             email,
             password,
             options: {
-              emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
+              emailRedirectTo:
+                import.meta.env.VITE_AUTH_REDIRECT_URL ||
+                new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
             },
           });
 
@@ -240,6 +284,81 @@ function App() {
       else next.add(soundId);
       return next;
     });
+  };
+
+  const togglePublished = async (sound: Sound) => {
+    if (!supabase || !user || sound.user_id !== user.id || busySoundIds.has(sound.id)) return;
+    setErrorMessage("");
+    setBusySoundIds((current) => new Set(current).add(sound.id));
+    const nextPublished = !sound.is_published;
+    const { error } = await supabase
+      .from("sounds")
+      .update({ is_published: nextPublished })
+      .eq("id", sound.id)
+      .eq("user_id", user.id)
+      .select("id")
+      .single();
+    setBusySoundIds((current) => {
+      const next = new Set(current);
+      next.delete(sound.id);
+      return next;
+    });
+    if (error) {
+      setErrorMessage(`Veröffentlichungsstatus konnte nicht geändert werden: ${error.message}`);
+      return;
+    }
+    setSounds((current) =>
+      current.map((item) => (item.id === sound.id ? { ...item, is_published: nextPublished } : item)),
+    );
+    setNotice(nextPublished ? "Dein Sound ist jetzt veröffentlicht." : "Dein Sound ist jetzt unveröffentlicht.");
+  };
+
+  const deleteSound = async (sound: Sound) => {
+    if (!supabase || !user || sound.user_id !== user.id || busySoundIds.has(sound.id)) return;
+    if (!window.confirm(`Möchtest du „${sound.title}“ wirklich löschen?`)) return;
+    setErrorMessage("");
+    setNotice("");
+    setBusySoundIds((current) => new Set(current).add(sound.id));
+    const { data, error } = await supabase
+      .from("sounds")
+      .delete()
+      .eq("id", sound.id)
+      .eq("user_id", user.id)
+      .select("file_path")
+      .single();
+    if (error) {
+      setBusySoundIds((current) => {
+        const next = new Set(current);
+        next.delete(sound.id);
+        return next;
+      });
+      setErrorMessage(`Sound konnte nicht gelöscht werden: ${error.message}`);
+      return;
+    }
+
+    setSounds((current) => current.filter((item) => item.id !== sound.id));
+    setAudioUrls((current) => {
+      const next = { ...current };
+      delete next[sound.id];
+      return next;
+    });
+    setFavorites((current) => {
+      const next = new Set(current);
+      next.delete(sound.id);
+      return next;
+    });
+
+    const { error: storageError } = await supabase.storage.from("sounds").remove([data.file_path]);
+    setBusySoundIds((current) => {
+      const next = new Set(current);
+      next.delete(sound.id);
+      return next;
+    });
+    if (storageError) {
+      setErrorMessage(`Sound-Metadaten wurden gelöscht, aber die Audiodatei konnte nicht entfernt werden: ${storageError.message}`);
+      return;
+    }
+    setNotice("Dein Sound wurde gelöscht.");
   };
 
   const downloadSound = async (sound: Sound) => {
@@ -327,14 +446,27 @@ function App() {
     setIsLoading(true);
     const { data, error: reloadError } = await supabase
       .from("sounds")
-      .select("id,user_id,title,description,file_path,mime_type,created_at")
+      .select("id,user_id,title,description,file_path,mime_type,created_at,is_published")
       .order("created_at", { ascending: false });
-    setIsLoading(false);
     if (reloadError) {
+      setIsLoading(false);
       setErrorMessage(`Sound wurde hochgeladen, aber die Liste konnte nicht aktualisiert werden: ${reloadError.message}`);
       return;
     }
+    const { data: signedFiles, error: signedFilesError } = data.length
+      ? await supabase.storage.from("sounds").createSignedUrls(data.map((sound) => sound.file_path), 3600)
+      : { data: [], error: null };
+    setIsLoading(false);
+    if (signedFilesError) {
+      setErrorMessage(`Sound wurde hochgeladen, aber die Audiodateien konnten nicht geladen werden: ${signedFilesError.message}`);
+      return;
+    }
+    const failedAudio = signedFiles?.find((file) => file.error || !file.signedUrl);
     setSounds(data);
+    setAudioUrls(getAudioUrls(data, signedFiles));
+    if (failedAudio) {
+      setErrorMessage(`Sound wurde hochgeladen, aber mindestens eine Audiodatei konnte nicht zum Abspielen vorbereitet werden: ${failedAudio.error ?? "Kein Wiedergabelink erhalten."}`);
+    }
   };
 
   return (
@@ -347,12 +479,18 @@ function App() {
         <div className="sidebar-label">DEIN SOUNDSPACE</div>
         <nav className="side-nav" aria-label="Bibliothek">
           <button className={`nav-item ${libraryMode === "all" ? "selected" : ""}`} onClick={() => setLibraryMode("all")}>
-            <Disc3 size={18} /> Alle Sounds <span className="nav-count">{sounds.length}</span>
+            <Disc3 size={18} /> Alle Sounds <span className="nav-count">{sounds.filter((sound) => sound.is_published).length}</span>
           </button>
           <button className={`nav-item ${libraryMode === "favorites" ? "selected" : ""}`} onClick={() => setLibraryMode("favorites")}>
             <Heart size={18} /> Favoriten
-            {user && <span className="nav-count">{favorites.size}</span>}
+            {user && <span className="nav-count">{sounds.filter((sound) => sound.is_published && favorites.has(sound.id)).length}</span>}
           </button>
+          {user && (
+            <button className={`nav-item ${libraryMode === "mine" ? "selected" : ""}`} onClick={() => setLibraryMode("mine")}>
+              <CloudUpload size={18} /> Meine Uploads
+              <span className="nav-count">{sounds.filter((sound) => sound.user_id === user.id).length}</span>
+            </button>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="community-card">
@@ -411,7 +549,7 @@ function App() {
           <div className="section-heading">
             <div>
               <div className="eyebrow muted-eyebrow">FRISCH AUS DER COMMUNITY</div>
-              <h2>{libraryMode === "all" ? "Sounds entdecken" : "Deine Favoriten"} <span className="sound-count">{visibleSounds.length.toString().padStart(2, "0")}</span></h2>
+              <h2>{libraryMode === "all" ? "Sounds entdecken" : libraryMode === "favorites" ? "Deine Favoriten" : "Meine Uploads"} <span className="sound-count">{visibleSounds.length.toString().padStart(2, "0")}</span></h2>
             </div>
             <label className="search-field">
               <Search size={17} />
@@ -434,7 +572,6 @@ function App() {
           ) : visibleSounds.length > 0 ? (
             <div className="sound-grid">
               {visibleSounds.map((sound) => {
-                const publicUrl = supabase?.storage.from("sounds").getPublicUrl(sound.file_path).data.publicUrl ?? "";
                 const isFavorite = favorites.has(sound.id);
                 return (
                   <article className="sound-card" key={sound.id}>
@@ -446,11 +583,35 @@ function App() {
                     </div>
                     <h3>{sound.title}</h3>
                     <p className="sound-description">{sound.description || "Ein Sound aus der MemeDeck-Community."}</p>
-                    <audio controls preload="none" src={publicUrl}>Dein Browser unterstützt keine Audio-Wiedergabe.</audio>
+                    <audio controls preload="none" src={audioUrls[sound.id]}>Dein Browser unterstützt keine Audio-Wiedergabe.</audio>
                     <div className="sound-card-footer">
                       <span>{formatDate(sound.created_at)}</span>
                       <button className="download-button" onClick={() => void downloadSound(sound)}><ArrowDownToLine size={15} /> Download</button>
                     </div>
+                    {user?.id === sound.user_id && (
+                      <div className="sound-owner-actions">
+                        <span className={`publication-status ${sound.is_published ? "" : "is-unpublished"}`}>
+                          {sound.is_published ? "Veröffentlicht" : "Unveröffentlicht"}
+                        </span>
+                        <button
+                          className="owner-action-button"
+                          onClick={() => void togglePublished(sound)}
+                          disabled={busySoundIds.has(sound.id)}
+                          aria-label={sound.is_published ? "Sound unveröffentlichen" : "Sound veröffentlichen"}
+                        >
+                          {sound.is_published ? <EyeOff size={15} /> : <Eye size={15} />}
+                          {sound.is_published ? "Verbergen" : "Veröffentlichen"}
+                        </button>
+                        <button
+                          className="owner-action-button delete-action"
+                          onClick={() => void deleteSound(sound)}
+                          disabled={busySoundIds.has(sound.id)}
+                          aria-label="Sound löschen"
+                        >
+                          <Trash2 size={15} /> Löschen
+                        </button>
+                      </div>
+                    )}
                   </article>
                 );
               })}
@@ -458,8 +619,8 @@ function App() {
           ) : (
             <div className="empty-state">
               <div className="empty-icon"><AudioLines size={24} /></div>
-              <h3>{libraryMode === "favorites" ? "Noch keine Favoriten" : query ? "Keine Sounds gefunden" : "Hier wird's bald laut."}</h3>
-              <p>{libraryMode === "favorites" ? "Speichere Sounds mit dem Herz, um sie hier wiederzufinden." : query ? "Versuch's mit einem anderen Suchbegriff." : "Sobald Supabase eingerichtet ist, kannst du hier Sounds entdecken und teilen."}</p>
+              <h3>{libraryMode === "favorites" ? "Noch keine Favoriten" : query ? "Keine Sounds gefunden" : libraryMode === "mine" ? "Noch keine Uploads" : "Hier wird's bald laut."}</h3>
+              <p>{libraryMode === "favorites" ? "Speichere Sounds mit dem Herz, um sie hier wiederzufinden." : query ? "Versuch's mit einem anderen Suchbegriff." : libraryMode === "mine" ? "Hier findest du deine hochgeladenen Sounds. Du kannst sie veröffentlichen, verbergen oder löschen." : "Sobald Supabase eingerichtet ist, kannst du hier Sounds entdecken und teilen."}</p>
               {!query && libraryMode === "all" && <button className="text-button" onClick={openUpload}>Mach den Anfang <span>↗</span></button>}
             </div>
           )}
